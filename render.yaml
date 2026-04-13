@@ -19,8 +19,15 @@ services:
       - key: PORT
         value: 8000
 
+<<<<<<< HEAD
   # Frontend Static Site (Vite / React)
   - type: static
+=======
+  # ────────────────────────────────────────
+  # Frontend Static Site (Vite / React)
+  # ─────────────────────────────────────────
+  -     type: static_site
+>>>>>>> d6be1a6dcbe33900bded695bd8e2ebf0690957b7
     name: stock-analyzer-web
     env: static
     plan: free
@@ -30,8 +37,8 @@ services:
     envVars:
       - key: VITE_API_URL
         fromService:
-          name: stock-analyzer-api
-          type: web
+              name: stock-analyzer-api
+           type: web
           property: host
     routes:
       - type: rewrite
