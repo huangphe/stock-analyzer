@@ -21,7 +21,7 @@ services:
   # ────────────────────────────────────────
   # Frontend Static Site (Vite / React)
   # ─────────────────────────────────────────
-  -    type: static_site
+  -     type: static_site
     name: stock-analyzer-web
     env: static
     plan: free
@@ -31,8 +31,8 @@ services:
     envVars:
       - key: VITE_API_URL
         fromService:
-          name: stock-analyzer-api
-          type: web
+              name: stock-analyzer-api
+                   type: web
           property: host
         generateValue: true # 自動動態指向後端網址
     routes:
