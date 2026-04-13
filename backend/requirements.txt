@@ -1,0 +1,28 @@
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-dotenv==1.0.1
+pydantic==2.7.1
+pydantic-settings==2.2.1
+
+# 資料來源
+yfinance==0.2.38
+twstock==1.5.0
+requests>=2.33.0
+aiohttp==3.9.5
+pandas>=2.2.2
+numpy>=1.26.4
+
+# 期權數學
+scipy==1.13.0
+
+# 快取
+redis==5.0.4
+cachetools==5.3.3
+
+# 資料庫 (Supabase/PostgreSQL)
+asyncpg==0.29.0
+sqlalchemy[asyncio]==2.0.30
+
+# 測試
+pytest==8.2.0
+httpx==0.27.0
