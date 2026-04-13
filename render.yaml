@@ -32,7 +32,7 @@ services:
       - key: VITE_API_URL
         fromService:
               name: stock-analyzer-api
-                   type: web
+           type: web
           property: host
         generateValue: true # 自動動態指向後端網址
     routes:
