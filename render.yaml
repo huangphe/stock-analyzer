@@ -18,10 +18,10 @@ services:
       - key: PORT
         value: 8000
 
-  # ─────────────────────────────────────────
+  # ────────────────────────────────────────
   # Frontend Static Site (Vite / React)
   # ─────────────────────────────────────────
-- type: static_site
+  -    type: static_site
     name: stock-analyzer-web
     env: static
     plan: free
