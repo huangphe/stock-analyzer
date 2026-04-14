@@ -327,6 +327,65 @@ class USStockFetcher:
 
 
 # ─────────────────────────────────────────
+# Fugle Market Data（台股歷史 K 線）
+# ─────────────────────────────────────────
+
+FUGLE_BASE = "https://api.fugle.tw/marketdata/v1.0/stock"
+
+_PERIOD_TO_DAYS = {
+    "1mo": 30, "3mo": 90, "6mo": 180,
+    "1y": 365, "2y": 730, "3y": 1095, "5y": 1825,
+}
+
+
+def _fugle_history(symbol: str, period: str, interval: str) -> List[dict]:
+    """
+    Fugle Market Data SDK 取台股歷史 K 線（API key 為原始 base64 字串）。
+    interval: "1d" → timeframe D, "1wk" → W, "1mo" → M
+    """
+    from core.config import settings
+    from fugle_marketdata import RestClient
+    api_key = settings.FUGLE_API_KEY
+    if not api_key:
+        raise ValueError("FUGLE_API_KEY 未設定")
+
+    timeframe_map = {"1d": "D", "1wk": "W", "1mo": "M"}
+    timeframe = timeframe_map.get(interval, "D")
+
+    from datetime import timedelta
+    days = _PERIOD_TO_DAYS.get(period, 180)
+    to_date = date.today()
+    from_date = to_date - timedelta(days=days)
+
+    client = RestClient(api_key=api_key)
+    data = client.stock.historical.candles(**{
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "from": from_date.isoformat(),
+        "to": to_date.isoformat(),
+    })
+
+    candles = data.get("data", [])
+    bars = []
+    for c in candles:
+        dt = str(c.get("date", ""))[:10]
+        try:
+            bars.append({
+                "date": dt,
+                "open": round(float(c.get("open") or 0), 4),
+                "high": round(float(c.get("high") or 0), 4),
+                "low": round(float(c.get("low") or 0), 4),
+                "close": round(float(c.get("close") or 0), 4),
+                "volume": int(c.get("volume") or 0),
+            })
+        except (TypeError, ValueError):
+            continue
+
+    bars.sort(key=lambda b: b["date"])
+    return bars
+
+
+# ─────────────────────────────────────────
 # 台股 (TWSE OpenAPI)
 # ─────────────────────────────────────────
 
@@ -466,13 +525,28 @@ class TWStockFetcher:
         period: str = "3mo",
         interval: str = "1d",
     ) -> List[dict]:
-        """取得台股歷史 K 線（Yahoo Finance，代號加 .TW 後綴）"""
+        """取得台股歷史 K 線（Fugle 主 → Yahoo 備援）"""
         code = symbol.replace(".TW", "")
         cache_key = f"tw_hist_{code}_{period}_{interval}"
         with _cache_lock:
             if cache_key in _history_cache:
                 return _history_cache[cache_key]
 
+        # 主：Fugle Market Data API（日線用，月線超過1年限制故略過）
+        if interval == "1d":
+            try:
+                from core.config import settings
+                if settings.FUGLE_API_KEY:
+                    bars = _fugle_history(code, period, interval)
+                    if bars:
+                        logger.info(f"Fugle 台股歷史成功: {code} {len(bars)} 根K棒")
+                        with _cache_lock:
+                            _history_cache[cache_key] = bars
+                        return bars
+            except Exception as e:
+                logger.warning(f"Fugle 台股歷史失敗 {code}，改用 Yahoo: {e}")
+
+        # 備援：Yahoo Finance（.TW 後綴）
         bars = USStockFetcher.get_history(f"{code}.TW", period=period, interval=interval)
         if bars:
             with _cache_lock:

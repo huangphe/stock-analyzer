@@ -2,15 +2,18 @@ import { useState, useMemo } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { 
-  Search, SlidersHorizontal, Activity, TrendingUp, 
+import {
+  Search, SlidersHorizontal, Activity, TrendingUp,
   ArrowRight, Globe, BarChart2, Zap, X, Star,
   ShieldCheck, AlertCircle, ChevronRight, Plus, Info,
-  ExternalLink, TrendingDown
+  ExternalLink, TrendingDown, Save, Clock, Trash2, ChevronDown
 } from 'lucide-react'
 import { stockApi } from '../utils/api'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+const REPORTS_KEY = 'screener_reports'
+const MAX_REPORTS = 10
 
 function loadWatchlist() {
   try {
@@ -18,6 +21,33 @@ function loadWatchlist() {
     if (raw) return JSON.parse(raw)
   } catch {}
   return []
+}
+
+function loadReports() {
+  try {
+    const raw = localStorage.getItem(REPORTS_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {}
+  return []
+}
+
+function saveReport(results, label) {
+  const reports = loadReports()
+  const entry = {
+    id: Date.now(),
+    label: label || new Date().toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+    savedAt: new Date().toISOString(),
+    data: results,
+  }
+  const updated = [entry, ...reports].slice(0, MAX_REPORTS)
+  localStorage.setItem(REPORTS_KEY, JSON.stringify(updated))
+  return updated
+}
+
+function deleteReport(id) {
+  const reports = loadReports().filter(r => r.id !== id)
+  localStorage.setItem(REPORTS_KEY, JSON.stringify(reports))
+  return reports
 }
 
 function SignalBadge({ signals }) {
@@ -158,7 +188,8 @@ function StockScreenerTable({ stocks, title, side }) {
                 <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest text-right">當前價格</th>
                 <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest text-right">漲跌幅</th>
                 <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest text-center">RSI</th>
-                <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest text-center">MA20</th>
+                <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest text-center">MACD</th>
+                <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest text-center">BB %b</th>
                 <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest text-center">量比</th>
                 <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest">掃描信號</th>
                 <th className="py-4 px-6 text-[9px] font-black text-zinc-600 uppercase tracking-widest text-center">評分</th>
@@ -203,9 +234,24 @@ function StockScreenerTable({ stocks, title, side }) {
                       </div>
                     </td>
                     <td className="py-4 px-4 text-center">
-                      <div className={`text-[9px] font-black uppercase ${item.price > item.ma20 ? 'text-emerald-500/60' : 'text-rose-500/60'}`}>
-                        {item.price > item.ma20 ? 'Above' : 'Below'}
-                      </div>
+                      {item.daily_macd?.macd != null ? (
+                        <div>
+                          <div className={`text-[10px] font-black font-mono ${item.daily_macd.is_golden_cross ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {item.daily_macd.is_golden_cross ? '金叉' : '死叉'}
+                          </div>
+                          <div className="text-[9px] text-zinc-700 font-mono">H {item.daily_macd.hist?.toFixed(3)}</div>
+                        </div>
+                      ) : <span className="text-zinc-700 text-[10px]">—</span>}
+                    </td>
+                    <td className="py-4 px-4 text-center">
+                      {item.bollinger?.pct_b != null ? (
+                        <div>
+                          <div className={`text-[10px] font-black font-mono ${item.bollinger.pct_b < 0.2 ? 'text-blue-400' : item.bollinger.pct_b > 0.8 ? 'text-amber-400' : 'text-zinc-400'}`}>
+                            {(item.bollinger.pct_b * 100).toFixed(0)}%
+                          </div>
+                          <div className="text-[9px] text-zinc-700">BW {item.bollinger.bandwidth?.toFixed(3)}</div>
+                        </div>
+                      ) : <span className="text-zinc-700 text-[10px]">—</span>}
                     </td>
                     <td className="py-4 px-4 text-center">
                       <div className={`text-[11px] font-black font-mono ${item.vol_ratio >= 1.5 ? 'text-amber-400' : 'text-zinc-600'}`}>
@@ -245,6 +291,9 @@ export default function Screener() {
   const [inputMarket, setInputMarket] = useState('US')
   const [inputSymbol, setInputSymbol] = useState('')
   const [tab, setTab] = useState('left')
+  const [reports, setReports] = useState(() => loadReports())
+  const [showReports, setShowReports] = useState(false)
+  const [savedMsg, setSavedMsg] = useState(false)
 
   const mutation = useMutation({
     mutationFn: (req) => stockApi.scanScreener(req),
@@ -266,6 +315,7 @@ export default function Screener() {
   }
 
   const handleScan = () => {
+    setLoadedReport(null)
     const stocks = []
     if (useWatchlist) watchlist.forEach(w => stocks.push({ market: w.market, symbol: w.symbol }))
     extraStocks.forEach(s => stocks.push(s))
@@ -280,8 +330,29 @@ export default function Screener() {
     })
   }
 
+  const handleSaveReport = () => {
+    if (!mutation.data) return
+    const updated = saveReport(mutation.data)
+    setReports(updated)
+    setSavedMsg(true)
+    setTimeout(() => setSavedMsg(false), 2000)
+  }
+
+  const handleDeleteReport = (id) => {
+    setReports(deleteReport(id))
+  }
+
+  const handleLoadReport = (reportData) => {
+    mutation.reset()
+    // Directly inject saved data by overriding mutation.data via a quick hack:
+    // We'll store loaded report separately
+    setLoadedReport(reportData)
+    setShowReports(false)
+  }
+
   // ── Derived Results ─────────────────────────────
-  const results = mutation.data
+  const [loadedReport, setLoadedReport] = useState(null)
+  const results = loadedReport || mutation.data
   const sideItems = useMemo(() => {
     if (!results) return []
     return tab === 'left' ? results.left_side : results.right_side
@@ -300,7 +371,38 @@ export default function Screener() {
           <h1 className="text-3xl font-bold text-white tracking-tight">智能全市場掃描器</h1>
           <p className="text-zinc-500 text-sm mt-1">跨市場捕捉反轉與突破特徵 · 資料處理全自動化系統</p>
         </div>
+        <button
+          onClick={() => setShowReports(v => !v)}
+          className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-300 bg-white/[0.03] px-4 py-2 rounded-xl border border-white/[0.05] transition-colors"
+        >
+          <Clock size={14} />
+          歷史報告 ({reports.length})
+          <ChevronDown size={12} className={`transition-transform ${showReports ? 'rotate-180' : ''}`} />
+        </button>
       </motion.div>
+
+      {/* Reports Panel */}
+      <AnimatePresence>
+        {showReports && (
+          <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="glass-card p-4 space-y-2">
+            <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest px-1 mb-3">已存報告（最多 {MAX_REPORTS} 筆）</p>
+            {reports.length === 0 ? (
+              <p className="text-xs text-zinc-700 text-center py-4">尚無儲存報告。掃描後點「存報告」即可保存。</p>
+            ) : reports.map(r => (
+              <div key={r.id} className="flex items-center justify-between px-4 py-3 rounded-xl bg-white/[0.02] border border-white/[0.04] hover:bg-white/[0.04] transition-colors">
+                <div>
+                  <div className="text-xs font-bold text-zinc-300">{r.label}</div>
+                  <div className="text-[10px] text-zinc-700">{r.data.total_scanned} 股掃描 · {new Date(r.savedAt).toLocaleDateString('zh-TW')}</div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => handleLoadReport(r.data)} className="text-[10px] font-bold text-brand-400 hover:text-brand-300 px-3 py-1.5 rounded-lg bg-brand-500/10 transition-colors">載入</button>
+                  <button onClick={() => handleDeleteReport(r.id)} className="text-zinc-700 hover:text-rose-400 p-1.5 rounded-lg transition-colors"><Trash2 size={12} /></button>
+                </div>
+              </div>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Settings Grid */}
       <section className="glass-card p-6 md:p-8 space-y-8 relative overflow-hidden">
@@ -410,8 +512,22 @@ export default function Screener() {
                    <button onClick={() => setTab('right')} className={`px-8 py-2.5 rounded-xl text-xs font-black transition-all ${tab === 'right' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'text-zinc-600 hover:text-zinc-400'}`}>右側交易信號</button>
                  </div>
                )}
-               <div className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest">
-                  Total Scanned: {results.total_scanned} Tickers
+               <div className="flex items-center gap-4">
+                 <div className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest">
+                    Total Scanned: {results.total_scanned} Tickers
+                 </div>
+                 {!loadedReport && (
+                   <button
+                     onClick={handleSaveReport}
+                     className={`flex items-center gap-1.5 text-[10px] font-black px-3 py-1.5 rounded-lg border transition-all ${savedMsg ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-white/[0.03] text-zinc-500 hover:text-zinc-300 border-white/[0.05]'}`}
+                   >
+                     <Save size={11} />
+                     {savedMsg ? '已儲存！' : '存報告'}
+                   </button>
+                 )}
+                 {loadedReport && (
+                   <span className="text-[10px] font-bold text-amber-500/70 px-3 py-1.5 rounded-lg bg-amber-500/5 border border-amber-500/10">📂 歷史報告</span>
+                 )}
                </div>
             </div>
 

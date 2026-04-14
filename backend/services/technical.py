@@ -73,6 +73,29 @@ def compute_macd(prices: List[float], slow: int = 26, fast: int = 12, signal: in
     }
 
 
+def compute_bollinger(prices: List[float], period: int = 20, std_dev: float = 2.0) -> Dict[str, Any]:
+    """計算布林通道 (Bollinger Bands)"""
+    if len(prices) < period:
+        return {"upper": None, "middle": None, "lower": None, "pct_b": None, "bandwidth": None}
+    window = prices[-period:]
+    middle = sum(window) / period
+    variance = sum((p - middle) ** 2 for p in window) / period
+    std = variance ** 0.5
+    upper = round(middle + std_dev * std, 4)
+    lower = round(middle - std_dev * std, 4)
+    middle = round(middle, 4)
+    current = prices[-1]
+    pct_b = round((current - lower) / (upper - lower), 4) if upper != lower else 0.5
+    bandwidth = round((upper - lower) / middle, 4) if middle else None
+    return {
+        "upper": upper,
+        "middle": middle,
+        "lower": lower,
+        "pct_b": pct_b,       # 0=下軌 0.5=中軌 1=上軌
+        "bandwidth": bandwidth, # 寬度比率（越高越波動）
+    }
+
+
 def analyze_stock(bars: List[Dict], monthly_bars: Optional[List[Dict]] = None) -> Dict[str, Any]:
     """計算技術指標並產生左側/右側交易信號"""
     if not bars or len(bars) < 20:
@@ -86,6 +109,8 @@ def analyze_stock(bars: List[Dict], monthly_bars: Optional[List[Dict]] = None) -
     rsi = compute_rsi(closes)
     ma20 = compute_ma(closes, 20)
     ma60 = compute_ma(closes, 60)
+    daily_macd = compute_macd(closes)
+    bollinger = compute_bollinger(closes)
 
     current_price = closes[-1]
 
@@ -143,12 +168,20 @@ def analyze_stock(bars: List[Dict], monthly_bars: Optional[List[Dict]] = None) -
         left_side_signals.append(f"RSI {rsi:.1f} 超賣")
     if ma20 and current_price < ma20 * 0.92:
         left_side_signals.append(f"偏離 MA20")
+    if bollinger["pct_b"] is not None and bollinger["pct_b"] < 0.05:
+        left_side_signals.append("觸及 BB 下軌")
+    if daily_macd["macd"] is not None and not daily_macd["is_golden_cross"] and daily_macd["hist"] is not None and daily_macd["hist"] > -0.01:
+        left_side_signals.append("MACD 死叉收窄")
 
     right_side_signals = []
     if ma20 and current_price > ma20:
         right_side_signals.append(f"站上 MA20")
     if vol_ratio is not None and vol_ratio >= 1.5:
         right_side_signals.append(f"爆量 ({vol_ratio}x)")
+    if daily_macd["is_golden_cross"]:
+        right_side_signals.append("MACD 日線金叉")
+    if bollinger["pct_b"] is not None and 0.4 <= bollinger["pct_b"] <= 0.6 and vol_ratio and vol_ratio >= 1.3:
+        right_side_signals.append("BB 中軌放量")
     
     # --- 回調至 MA20 放量陽線 ---
     # 條件：最近 5 個交易日內，任一天滿足：
@@ -201,13 +234,15 @@ def analyze_stock(bars: List[Dict], monthly_bars: Optional[List[Dict]] = None) -
         "rsi": rsi,
         "ma20": ma20,
         "vol_ratio": vol_ratio,
+        "daily_macd": daily_macd,
+        "bollinger": bollinger,
         "left_side_signals": left_side_signals,
         "right_side_signals": right_side_signals,
         "strategy_signals": strategy_signals,
         "monthly_macd": monthly_macd,
         "is_momentum_candidate": is_momentum_candidate,
-        "limit_up_dates": limit_up_dates,      # 近10天漲停日期與漲幅
-        "pullback_bar": pullback_bar,           # 觸發MA20放量陽線的K棒
+        "limit_up_dates": limit_up_dates,
+        "pullback_bar": pullback_bar,
         "left_score": len(left_side_signals),
         "right_score": len(right_side_signals) + (1 if has_limit_up_recent else 0),
     }

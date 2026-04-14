@@ -1,0 +1,96 @@
+name: 每日漲停股紀錄 — 收盤後自動更新
+
+on:
+  schedule:
+    # 台灣時間 14:45（UTC 06:45），收盤後 15 分鐘確保資料到位
+    - cron: '45 6 * * 1-5'
+  workflow_dispatch:  # 允許手動觸發
+
+jobs:
+  update-limit-up-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch today's limit-up stocks and update log
+        run: |
+          python - <<'EOF'
+          import json, requests, os
+          from datetime import date, timedelta
+
+          LOG_PATH = "backend/data/limit_up_log.json"
+          KEEP_DAYS = 10
+          LIMIT_UP_THRESHOLD = 0.098
+
+          today = date.today().isoformat()
+
+          # 讀現有 log
+          with open(LOG_PATH, "r", encoding="utf-8") as f:
+              log = json.load(f)
+
+          # 從 TWSE 抓今日漲停股
+          url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+          try:
+              resp = requests.get(url, timeout=15)
+              resp.raise_for_status()
+              data = resp.json()
+          except Exception as e:
+              print(f"TWSE API 失敗: {e}")
+              data = []
+
+          candidates = []
+          for item in data:
+              code = item.get("Code", "")
+              if not code or len(code) != 4 or not code.isdigit():
+                  continue
+              try:
+                  close = float(str(item.get("ClosingPrice", 0)).replace(",", ""))
+                  change = float(str(item.get("Change", 0)).replace(",", ""))
+              except Exception:
+                  continue
+              if close <= 0:
+                  continue
+              prev = close - change
+              if prev <= 0:
+                  continue
+              if change / prev >= LIMIT_UP_THRESHOLD:
+                  candidates.append(code)
+
+          print(f"今日 ({today}) 漲停股: {len(candidates)} 檔 → {candidates[:20]}...")
+
+          # 更新 log
+          log[today] = candidates
+
+          # 只保留最近 KEEP_DAYS 天
+          all_dates = sorted(log.keys())
+          cutoff = (date.today() - timedelta(days=KEEP_DAYS)).isoformat()
+          log = {d: v for d, v in log.items() if d >= cutoff}
+
+          with open(LOG_PATH, "w", encoding="utf-8") as f:
+              json.dump(log, f, ensure_ascii=False, indent=2)
+
+          print(f"Log 更新完成，保留 {len(log)} 天資料: {sorted(log.keys())}")
+          EOF
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add backend/data/limit_up_log.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit (可能非交易日)"
+          else
+            git commit -m "chore: update limit_up_log $(date -u +'%Y-%m-%d')"
+            git push
+          fi

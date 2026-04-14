@@ -1,16 +1,18 @@
+import { lazy, Suspense } from 'react'
 import { Routes, Route, NavLink, Link, useLocation } from 'react-router-dom'
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, LineChart, Layers, SlidersHorizontal,
-  Menu, X, Wifi, TrendingUp, Home as HomeIcon, TrendingDown,
+  Menu, X, TrendingUp, Home as HomeIcon, TrendingDown,
 } from 'lucide-react'
-import Home from './pages/Home'
-import StockAnalysis from './pages/StockAnalysis'
-import OptionsStrategy from './pages/OptionsStrategy'
-import Dashboard from './pages/Dashboard'
-import Screener from './pages/Screener'
-import ContraryIndicator from './pages/ContraryIndicator'
+
+const Home             = lazy(() => import('./pages/Home'))
+const StockAnalysis    = lazy(() => import('./pages/StockAnalysis'))
+const OptionsStrategy  = lazy(() => import('./pages/OptionsStrategy'))
+const Dashboard        = lazy(() => import('./pages/Dashboard'))
+const Screener         = lazy(() => import('./pages/Screener'))
+const ContraryIndicator = lazy(() => import('./pages/ContraryIndicator'))
 
 const NAV = [
   { to: '/',           label: '首頁',      icon: HomeIcon, end: true },
@@ -21,10 +23,17 @@ const NAV = [
   { to: '/contrary',   label: '逆向指標',  icon: TrendingDown         },
 ]
 
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center min-h-[40vh]">
+      <div className="w-6 h-6 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
+    </div>
+  )
+}
+
 export default function App() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const location = useLocation()
-  const currentPage = NAV.find(n => n.end ? location.pathname === n.to : location.pathname.startsWith(n.to))
 
   return (
     <div className="min-h-screen flex flex-col bg-[#09090b]">
@@ -150,14 +159,16 @@ export default function App() {
             className="h-full"
           >
             <div className="max-w-screen-xl mx-auto px-4 py-8">
-              <Routes location={location} key={location.pathname}>
-                <Route path="/"         element={<Home />} />
-                <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/stocks"   element={<StockAnalysis />} />
-                <Route path="/screener" element={<Screener />} />
-                <Route path="/options"  element={<OptionsStrategy />} />
-                <Route path="/contrary" element={<ContraryIndicator />} />
-              </Routes>
+              <Suspense fallback={<PageLoader />}>
+                <Routes location={location} key={location.pathname}>
+                  <Route path="/"         element={<Home />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/stocks"   element={<StockAnalysis />} />
+                  <Route path="/screener" element={<Screener />} />
+                  <Route path="/options"  element={<OptionsStrategy />} />
+                  <Route path="/contrary" element={<ContraryIndicator />} />
+                </Routes>
+              </Suspense>
             </div>
           </motion.div>
         </AnimatePresence>
@@ -175,4 +186,3 @@ export default function App() {
     </div>
   )
 }
-

@@ -3,17 +3,20 @@
 POST /api/screener/scan
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
 from services.data_fetcher import USStockFetcher, TWStockFetcher
 from services.technical import analyze_stock
 from services.market_scanner import TWMarketScanner
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 import logging
 import concurrent.futures
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+limiter = Limiter(key_func=get_remote_address)
 
 # 內建篩選宇宙
 DEFAULT_US = [
@@ -80,21 +83,22 @@ def _fetch_and_analyze(market: str, symbol: str, include_monthly: bool = False):
 
 
 @router.post("/scan")
-async def scan_stocks(req: ScanRequest):
+@limiter.limit("10/minute")
+async def scan_stocks(request: Request, req: ScanRequest):
     """掃描股票並回傳左側/右側交易信號"""
     stocks_to_scan = list(req.stocks)
     is_momentum_mode = (req.strategy == "tw_momentum")
 
     # 特殊策略模式：台股強勢股 Discovery
     if is_momentum_mode:
-        # 主池：TW_UNIVERSE 涵蓋各類主要流動性股票
-        # analyze_stock 用實際 6mo 日線資料驗證近 10 天是否有漲停，今日漲不漲停不影響入池
-        for sym in TWMarketScanner.get_tw_universe():
-            stocks_to_scan.append(StockItem(market="TW", symbol=sym))
-        # 補充：今日 TWSE 漲停股（捕捉主池未涵蓋的新興股，限制數量避免掃描過慢）
         universe_set = set(TWMarketScanner.get_tw_universe())
-        extra_limit_up = [s for s in TWMarketScanner.get_limit_up_candidates() if s not in universe_set]
-        for sym in extra_limit_up[:20]:  # 最多補充 20 支
+        # 主池：TW_UNIVERSE
+        for sym in universe_set:
+            stocks_to_scan.append(StockItem(market="TW", symbol=sym))
+        # 補充：近 10 天漲停股中，主池未涵蓋的新興股（來自 limit_up_log.json）
+        rolling_limit_up = TWMarketScanner.get_rolling_limit_up(days=10)
+        extra = [s for s in rolling_limit_up if s not in universe_set]
+        for sym in extra[:30]:  # 最多補充 30 支
             stocks_to_scan.append(StockItem(market="TW", symbol=sym))
 
     if req.include_us_universe:

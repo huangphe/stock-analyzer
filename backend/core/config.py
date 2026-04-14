@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Finnhub API（美股報價主要來源）
     FINNHUB_API_KEY: str = ""
 
+    # Fugle Market Data API（台股歷史 K 線主要來源）
+    FUGLE_API_KEY: str = ""
+
     # 無風險利率（用於 Black-Scholes）
     RISK_FREE_RATE: float = 0.053  # 美國 10 年公債殖利率（近似）
     RISK_FREE_RATE_TW: float = 0.015  # 台灣 10 年公債殖利率（近似）
