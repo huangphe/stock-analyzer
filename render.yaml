@@ -38,44 +38,4 @@ services:
                                                                                                           name: stock-analyzer-cache
                                                                                                             plan: free
                                                                                                               ipAllowList: []
-                                                                                                              services:
-  - type: web
-      name: stock-analyzer-api
-          env: docker
-              plan: free
-                  rootDir: backend
-                      healthCheckPath: /health
-                          envVars:
-                                - key: DATABASE_URL
-                                        fromContext: DATABASE_URL
-                                              - key: FINNHUB_API_KEY
-                                                      fromContext: FINNHUB_API_KEY
-                                                            - key: REDIS_URL
-                                                                    fromService:
-                                                                              name: stock-analyzer-cache
-                                                                                        type: redis
-                                                                                                  property: connectionString
-                                                                                                        - key: PORT
-                                                                                                                value: 8000
-                                                                                                                  - type: static_site
-                                                                                                                      name: stock-analyzer-web
-                                                                                                                          env: static
-                                                                                                                              plan: free
-                                                                                                                                  rootDir: frontend
-                                                                                                                                      buildCommand: npm install && npm run build
-                                                                                                                                          publishDir: dist
-                                                                                                                                              envVars:
-                                                                                                                                                    - key: VITE_API_URL
-                                                                                                                                                            fromService:
-                                                                                                                                                                      name: stock-analyzer-api
-                                                                                                                                                                                type: web
-                                                                                                                                                                                          property: host
-                                                                                                                                                                                              routes:
-                                                                                                                                                                                                    - type: rewrite
-                                                                                                                                                                                                            source: /*
-                                                                                                                                                                                                                    destination: /index.html
-                                                                                                                                                                                                                      - type: redis
-                                                                                                                                                                                                                          name: stock-analyzer-cache
-                                                                                                                                                                                                                              plan: free
-                                                                                                                                                                                                                                  ipAllowList: []
-                                                                                                                                                                                                                                  
+                                                                                                              
