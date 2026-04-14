@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
@@ -126,7 +126,14 @@ function MiniChart({ market, symbol, period }) {
 
 export default function ContraryIndicator() {
   const [iframeLoaded, setIframeLoaded] = useState(false)
+  const [iframeError, setIframeError]   = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
+
+  useEffect(() => {
+    if (iframeLoaded) return
+    const t = setTimeout(() => setIframeError(true), 12000)
+    return () => clearTimeout(t)
+  }, [iframeLoaded])
   const [activeIdx, setActiveIdx]   = useState(0)
   const [period,    setPeriod]      = useState('3mo')
   const { market, symbol } = CHART_SYMBOLS[activeIdx]
@@ -204,10 +211,25 @@ export default function ContraryIndicator() {
         </div>
 
         <div className={`relative bg-[#0d0d10] transition-all duration-500 ${fullscreen ? 'h-[85vh]' : 'h-[640px]'}`}>
-          {!iframeLoaded && (
+          {!iframeLoaded && !iframeError && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-zinc-600">
               <RefreshCw size={28} className="animate-spin text-purple-500/50" />
               <span className="text-sm">載入中…</span>
+            </div>
+          )}
+          {iframeError && !iframeLoaded && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-zinc-600">
+              <AlertCircle size={32} className="text-zinc-700" />
+              <p className="text-sm text-zinc-500">工具載入逾時，可能被瀏覽器封鎖</p>
+              <a
+                href="https://hansai-art.github.io/8zz-Contrarian-Indicator-TradingView/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600/10 border border-purple-500/20 text-purple-300 text-sm hover:bg-purple-600/20 transition-colors"
+              >
+                <ExternalLink size={14} />
+                在新分頁開啟
+              </a>
             </div>
           )}
           <iframe

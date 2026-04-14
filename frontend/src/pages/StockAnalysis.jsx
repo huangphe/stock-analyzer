@@ -203,11 +203,14 @@ function generateAnalysis(quote, histData) {
     points.push({ type: 'bullish', icon: TrendingUp, text: `多頭排列：股價穩守 MA20 及 MA60 之上，趨勢偏多發展。` })
   } else if (trend === 'bearish') {
     points.push({ type: 'bearish', icon: TrendingDown, text: `空頭預警：股價跌破關鍵均線支撐，目前處於下行通道。` })
+  } else {
+    points.push({ type: 'neutral', icon: Activity, text: `目前處於盤整區間，均線糾結，等待方向性突破訊號。` })
   }
 
   if (rsi != null) {
      if (rsi > 70) points.push({ type: 'warning', icon: AlertTriangle, text: `RSI 指標超買（${rsi.toFixed(1)}），短線追高回調風險大。` })
      else if (rsi < 30) points.push({ type: 'bullish', icon: Zap, text: `RSI 進入超賣區（${rsi.toFixed(1)}），可留意跌深反彈機會。` })
+     else if (rsi >= 45 && rsi <= 55) points.push({ type: 'neutral', icon: Info, text: `RSI ${rsi.toFixed(1)} 位於中性區，動能尚未明顯偏向多空。` })
   }
 
   const positionPct = ((price - low52) / (high52 - low52) * 100).toFixed(0)

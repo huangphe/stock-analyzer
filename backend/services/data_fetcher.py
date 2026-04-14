@@ -65,7 +65,7 @@ class USStockFetcher:
         except Exception:
             pass
 
-        return {
+        result = {
             "symbol": sym,
             "market": "US",
             "name": name,
@@ -81,6 +81,21 @@ class USStockFetcher:
             "pe_ratio": None,
             "timestamp": datetime.now().isoformat(),
         }
+
+        # 補充基本面：Finnhub /stock/metric（免費版支援，同一 API key）
+        try:
+            metrics = _finnhub_get("/stock/metric", {"symbol": sym, "metric": "all"})
+            m = metrics.get("metric", {})
+            pe = m.get("peNormalizedAnnual") or m.get("peTTM")
+            mc = m.get("marketCapitalization")  # in millions USD
+            if pe:
+                result["pe_ratio"] = round(float(pe), 2)
+            if mc:
+                result["market_cap"] = round(float(mc) * 1_000_000, 0)
+        except Exception:
+            pass
+
+        return result
 
     @staticmethod
     def _quote_via_yfinance(symbol: str) -> dict:
@@ -255,54 +270,60 @@ class USStockFetcher:
 
     @staticmethod
     def get_options_chain(symbol: str, expiry: Optional[str] = None) -> dict:
-        """取得美股期權鏈 (使用 yfinance 抓取)"""
-        try:
-            ticker = yf.Ticker(symbol.upper())
-            expiry_dates = ticker.options
-
-            if not expiry_dates:
-                raise ValueError(f"{symbol} 無可用期權資料")
-
-            target_expiry = expiry if expiry in expiry_dates else expiry_dates[0]
-
-            # yfinance 已經升級，通常可以直接取得 chain
-            chain = ticker.option_chain(target_expiry)
-            
-            # 使用更穩定的 get_quote 取得標的價格
+        """取得美股期權鏈 (使用 yfinance 抓取，帶 retry)"""
+        last_err = None
+        for attempt in range(3):
             try:
-                quote_data = USStockFetcher.get_quote(symbol)
-                underlying_price = quote_data.get("price", 0)
-            except Exception:
-                underlying_price = ticker.fast_info.get("last_price") or 0
+                ticker = yf.Ticker(symbol.upper())
+                expiry_dates = ticker.options   # 此行最常因 Yahoo 空回應而失敗
 
-            def process_chain(df: pd.DataFrame, opt_type: str) -> List[dict]:
-                result = []
-                for _, row in df.iterrows():
-                    result.append({
-                        "symbol": str(row.get("contractSymbol", "")),
-                        "expiry": target_expiry,
-                        "strike": float(row["strike"]),
-                        "option_type": opt_type,
-                        "last_price": float(row.get("lastPrice", 0)),
-                        "bid": float(row.get("bid", 0)),
-                        "ask": float(row.get("ask", 0)),
-                        "volume": int(row.get("volume", 0) or 0),
-                        "open_interest": int(row.get("openInterest", 0) or 0),
-                        "implied_volatility": round(float(row.get("impliedVolatility", 0)), 4),
-                    })
-                return result
+                if not expiry_dates:
+                    raise ValueError(f"{symbol} 無可用期權資料")
 
-            return {
-                "symbol": symbol.upper(),
-                "underlying_price": underlying_price,
-                "expiry_dates": list(expiry_dates),
-                "calls": process_chain(chain.calls, "call"),
-                "puts": process_chain(chain.puts, "put"),
-            }
+                target_expiry = expiry if expiry in expiry_dates else expiry_dates[0]
+                chain = ticker.option_chain(target_expiry)
 
-        except Exception as e:
-            logger.error(f"期權鏈抓取失 {symbol}: {e}")
-            raise ValueError(f"無法取得 {symbol} 期權資料：{str(e)}")
+                try:
+                    quote_data = USStockFetcher.get_quote(symbol)
+                    underlying_price = quote_data.get("price", 0)
+                except Exception:
+                    underlying_price = ticker.fast_info.get("last_price") or 0
+
+                def process_chain(df: pd.DataFrame, opt_type: str) -> List[dict]:
+                    result = []
+                    for _, row in df.iterrows():
+                        result.append({
+                            "symbol": str(row.get("contractSymbol", "")),
+                            "expiry": target_expiry,
+                            "strike": float(row["strike"]),
+                            "option_type": opt_type,
+                            "last_price": float(row.get("lastPrice", 0)),
+                            "bid": float(row.get("bid", 0)),
+                            "ask": float(row.get("ask", 0)),
+                            "volume": int(row.get("volume", 0) or 0),
+                            "open_interest": int(row.get("openInterest", 0) or 0),
+                            "implied_volatility": round(float(row.get("impliedVolatility", 0)), 4),
+                        })
+                    return result
+
+                return {
+                    "symbol": symbol.upper(),
+                    "underlying_price": underlying_price,
+                    "expiry_dates": list(expiry_dates),
+                    "calls": process_chain(chain.calls, "call"),
+                    "puts": process_chain(chain.puts, "put"),
+                }
+
+            except ValueError:
+                raise   # 已知「無資料」直接往外拋，不重試
+            except Exception as e:
+                last_err = e
+                logger.warning(f"期權鏈抓取失敗 {symbol} (attempt {attempt+1}/3): {e}")
+                if attempt < 2:
+                    time.sleep(1.5 ** attempt + random.uniform(0.3, 0.8))
+
+        logger.error(f"期權鏈三次重試均失敗 {symbol}: {last_err}")
+        raise ValueError(f"無法取得 {symbol} 期權資料：{last_err}")
 
 
 # ─────────────────────────────────────────

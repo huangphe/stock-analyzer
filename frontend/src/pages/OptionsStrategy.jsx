@@ -20,21 +20,62 @@ function fmt(v, dec = 2) {
   return typeof v === 'number' ? v.toFixed(dec) : v
 }
 
-/** 辨識策略名稱 (簡化版) */
+/** 辨識策略名稱 */
 function identifyStrategy(legs) {
   if (!legs || legs.length === 0) return '尚未配置'
+
+  const calls = [...legs.filter(l => l.option_type === 'call')].sort((a, b) => a.strike - b.strike)
+  const puts  = [...legs.filter(l => l.option_type === 'put' )].sort((a, b) => a.strike - b.strike)
+
   if (legs.length === 1) {
-     const l = legs[0]
-     return `${l.action === 'buy' ? '買入' : '賣出'} ${l.option_type === 'call' ? '買權' : '賣權'}`
+    const l = legs[0]
+    return `${l.action === 'buy' ? '買入' : '賣出'} ${l.option_type === 'call' ? '買權' : '賣權'}`
   }
-  // TODO: 更複雜的辨識邏輯 (多頭價差, 鐵兀鷹等)
+
   if (legs.length === 2) {
-     const [l1, l2] = legs
-     if (l1.option_type === l2.option_type && l1.action !== l2.action) {
-        return `${l1.option_type === 'call' ? '買權' : '賣權'}價差策略`
-     }
+    // Straddle / Strangle：1 call + 1 put
+    if (calls.length === 1 && puts.length === 1) {
+      const c = calls[0], p = puts[0]
+      const bothBuy  = c.action === 'buy'  && p.action === 'buy'
+      const bothSell = c.action === 'sell' && p.action === 'sell'
+      if (c.strike === p.strike) {
+        if (bothBuy)  return '買入跨式策略 (Long Straddle)'
+        if (bothSell) return '賣出跨式策略 (Short Straddle)'
+      }
+      if (bothBuy)  return '買入勒式策略 (Long Strangle)'
+      if (bothSell) return '賣出勒式策略 (Short Strangle)'
+    }
+    // Call Spread
+    if (calls.length === 2) {
+      const buy  = calls.find(l => l.action === 'buy')
+      const sell = calls.find(l => l.action === 'sell')
+      if (buy && sell)
+        return buy.strike < sell.strike
+          ? '多頭買權價差 (Bull Call Spread)'
+          : '空頭買權價差 (Bear Call Spread)'
+    }
+    // Put Spread
+    if (puts.length === 2) {
+      const buy  = puts.find(l => l.action === 'buy')
+      const sell = puts.find(l => l.action === 'sell')
+      if (buy && sell)
+        return buy.strike > sell.strike
+          ? '空頭賣權價差 (Bear Put Spread)'
+          : '多頭賣權價差 (Bull Put Spread)'
+    }
   }
-  if (legs.length === 4) return '複雜組合策略 (如鐵兀鷹)'
+
+  if (legs.length === 4 && calls.length === 2 && puts.length === 2) {
+    const sellPut  = puts.find(l => l.action === 'sell')
+    const buyPut   = puts.find(l => l.action === 'buy')
+    const sellCall = calls.find(l => l.action === 'sell')
+    const buyCall  = calls.find(l => l.action === 'buy')
+    if (sellPut && buyPut && sellCall && buyCall) {
+      if (sellPut.strike === sellCall.strike) return '鐵蝴蝶策略 (Iron Butterfly)'
+      return '鐵兀鷹策略 (Iron Condor)'
+    }
+  }
+
   return '自定義組合'
 }
 
@@ -128,7 +169,7 @@ export default function OptionsStrategy() {
   const [symbol, setSymbol] = useState(searchParams.get('symbol') || 'AAPL')
   const market = 'US'
   const [underlyingPrice, setUnderlyingPrice] = useState(
-    parseFloat(searchParams.get('price') || '150')
+    parseFloat(searchParams.get('price') || '0')
   )
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [legs, setLegs] = useState([])
@@ -136,10 +177,11 @@ export default function OptionsStrategy() {
   const [showAllStrikes, setShowAllStrikes] = useState(false)
 
   // 1. 取得期權鏈
-  const { data: chain, isLoading: chainLoading } = useQuery({
+  const { data: chain, isLoading: chainLoading, error: chainError } = useQuery({
     queryKey: ['optionsChain', symbol, selectedExpiry],
     queryFn: () => optionsApi.getChain(symbol, selectedExpiry),
-    enabled: !!symbol && market === 'US', 
+    enabled: !!symbol && market === 'US',
+    retry: 1,
   })
 
   // 同步基礎參數
@@ -239,7 +281,9 @@ export default function OptionsStrategy() {
                   </div>
                   <div className="flex items-center gap-1.5 px-3 py-2 bg-white/[0.02] border border-white/5 rounded-xl">
                      <span className="text-[10px] font-black text-zinc-600 uppercase">Spot</span>
-                     <span className="text-sm font-black font-mono text-brand-400">${fmt(underlyingPrice)}</span>
+                     <span className="text-sm font-black font-mono text-brand-400">
+                       {underlyingPrice > 0 ? `$${fmt(underlyingPrice)}` : '—'}
+                     </span>
                   </div>
                </div>
 
@@ -261,6 +305,16 @@ export default function OptionsStrategy() {
                <div className="flex-1 flex flex-col items-center justify-center space-y-4">
                   <Activity size={32} className="text-zinc-800 animate-pulse" />
                   <p className="text-[10px] font-bold text-zinc-700 uppercase tracking-widest">正在載入即時鏈結數據...</p>
+               </div>
+            ) : chainError ? (
+               <div className="flex-1 flex flex-col items-center justify-center space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-rose-500/10 flex items-center justify-center border border-rose-500/20">
+                     <X size={20} className="text-rose-400" />
+                  </div>
+                  <p className="text-sm font-bold text-zinc-400">期權鏈載入失敗</p>
+                  <p className="text-[11px] text-zinc-600 max-w-xs text-center">
+                     {chainError?.response?.data?.detail || 'Yahoo Finance 暫時無法取得資料，請稍後再試'}
+                  </p>
                </div>
             ) : chain ? (
                <div className="flex-1 overflow-x-auto">
