@@ -36,6 +36,19 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react':  ['react', 'react-dom', 'react-router-dom'],
+          'vendor-charts': ['recharts'],
+          'vendor-motion': ['framer-motion'],
+          'vendor-query':  ['@tanstack/react-query'],
+          'vendor-icons':  ['lucide-react'],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

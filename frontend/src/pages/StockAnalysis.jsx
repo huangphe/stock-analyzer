@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useSearchParams, Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
+  ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine, Cell,
 } from 'recharts'
 import {
@@ -53,6 +53,55 @@ function computeRSI(closes, period = 14) {
     al = (al * (period - 1) + losses[i]) / period
   }
   return al === 0 ? 100 : 100 - 100 / (1 + ag / al)
+}
+
+function computeBollinger(closes, period = 20, mult = 2) {
+  return closes.map((_, i) => {
+    if (i < period - 1) return { bb_upper: null, bb_mid: null, bb_lower: null }
+    const slice = closes.slice(i - period + 1, i + 1)
+    const mean = slice.reduce((s, v) => s + v, 0) / period
+    const std = Math.sqrt(slice.reduce((s, v) => s + (v - mean) ** 2, 0) / period)
+    return { bb_upper: mean + mult * std, bb_mid: mean, bb_lower: mean - mult * std }
+  })
+}
+
+function computeMACD(closes, fast = 12, slow = 26, signal = 9) {
+  const calcEma = (arr, n) => {
+    const k = 2 / (n + 1)
+    const out = new Array(arr.length).fill(null)
+    let prev = null
+    arr.forEach((v, i) => {
+      if (i < n - 1) return
+      if (i === n - 1) { prev = arr.slice(0, n).reduce((s, x) => s + x, 0) / n; out[i] = prev; return }
+      prev = v * k + prev * (1 - k); out[i] = prev
+    })
+    return out
+  }
+  const fastEma = calcEma(closes, fast)
+  const slowEma = calcEma(closes, slow)
+  const macdLine = closes.map((_, i) =>
+    fastEma[i] != null && slowEma[i] != null ? +(fastEma[i] - slowEma[i]).toFixed(4) : null
+  )
+  // compute signal EMA on the macd values (treating nulls as gaps)
+  const k = 2 / (signal + 1)
+  const signalArr = new Array(closes.length).fill(null)
+  let prevSig = null, cnt = 0
+  macdLine.forEach((v, i) => {
+    if (v == null) return
+    if (cnt < signal - 1) { cnt++; return }
+    if (cnt === signal - 1) {
+      // seed: average of first `signal` macd values
+      const start = macdLine.slice(0, i + 1).filter(x => x != null)
+      prevSig = start.slice(-signal).reduce((s, x) => s + x, 0) / signal
+      signalArr[i] = +prevSig.toFixed(4); cnt++; return
+    }
+    prevSig = v * k + prevSig * (1 - k)
+    signalArr[i] = +prevSig.toFixed(4)
+  })
+  const hist = macdLine.map((v, i) =>
+    v != null && signalArr[i] != null ? +(v - signalArr[i]).toFixed(4) : null
+  )
+  return { macdLine, signalArr, hist }
 }
 
 // ── KPI Card ────────────────────────────────────────────────────────────────
@@ -114,21 +163,29 @@ function ChartTooltip({ active, payload, label }) {
 }
 
 // ── Price Chart ─────────────────────────────────────────────────────────────
-function PriceChart({ data }) {
+function PriceChart({ data, showBB }) {
   const closes = data.map(b => b.close)
   const ma20arr = computeMA(closes, 20)
   const ma60arr = computeMA(closes, 60)
+  const bband = showBB ? computeBollinger(closes) : null
 
   const chartData = data.map((b, i) => ({
     ...b,
     body: [Math.min(b.open, b.close), Math.max(b.open, b.close)],
     ma20: ma20arr[i],
     ma60: ma60arr[i],
+    ...(bband ? bband[i] : {}),
   }))
 
   return (
     <ResponsiveContainer width="100%" height={320}>
       <ComposedChart data={chartData} margin={{ left: 0, right: 0, top: 10, bottom: 0 }}>
+        <defs>
+          <linearGradient id="bbFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.08} />
+            <stop offset="95%" stopColor="#06b6d4" stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
         <CartesianGrid strokeDasharray="3 6" stroke="rgba(255,255,255,0.03)" vertical={false} />
         <XAxis
           dataKey="date"
@@ -149,13 +206,21 @@ function PriceChart({ data }) {
           orientation="right"
         />
         <Tooltip content={<ChartTooltip />} cursor={{ stroke: 'rgba(255,255,255,0.1)', strokeWidth: 1 }} />
+        {showBB && (
+          <>
+            <Area dataKey="bb_upper" stroke="#06b6d4" strokeWidth={1} dot={false} fill="url(#bbFill)" connectNulls opacity={0.5} name="BB上軌" />
+            <Area dataKey="bb_lower" stroke="#06b6d4" strokeWidth={1} dot={false} fill="transparent" connectNulls opacity={0.5} name="BB下軌" />
+            <Line dataKey="bb_mid" stroke="#06b6d4" strokeWidth={1} dot={false} strokeDasharray="3 3" connectNulls opacity={0.4} name="BB中軌" />
+          </>
+        )}
         <Bar dataKey="body" radius={[2, 2, 2, 2]}>
           {chartData.map((entry, i) => (
             <Cell key={i} fill={entry.close >= entry.open ? UP : DOWN} opacity={0.7} />
           ))}
         </Bar>
-        <Line dataKey="ma20" stroke="#f59e0b" dot={false} strokeWidth={2} name="MA20" connectNulls strokeDasharray="5 5" opacity={0.6} />
-        <Line dataKey="ma60" stroke="#8b5cf6" dot={false} strokeWidth={2} name="MA60" connectNulls opacity={0.6} />
+        {!showBB && <Line dataKey="ma20" stroke="#f59e0b" dot={false} strokeWidth={2} name="MA20" connectNulls strokeDasharray="5 5" opacity={0.6} />}
+        {!showBB && <Line dataKey="ma60" stroke="#8b5cf6" dot={false} strokeWidth={2} name="MA60" connectNulls opacity={0.6} />}
+        {showBB && <Line dataKey="ma20" stroke="#f59e0b" dot={false} strokeWidth={1} name="MA20" connectNulls strokeDasharray="5 5" opacity={0.3} />}
       </ComposedChart>
     </ResponsiveContainer>
   )
@@ -175,6 +240,61 @@ function VolumeChart({ data }) {
             <Cell key={i} fill={b.close >= b.open ? `${UP}44` : `${DOWN}44`} />
           ))}
         </Bar>
+      </ComposedChart>
+    </ResponsiveContainer>
+  )
+}
+
+// ── MACD Chart ──────────────────────────────────────────────────────────────
+function MacdChart({ data }) {
+  const closes = data.map(b => b.close)
+  const { macdLine, signalArr, hist } = computeMACD(closes)
+
+  const chartData = data.map((b, i) => ({
+    date: b.date,
+    hist: hist[i],
+    macd: macdLine[i],
+    signal: signalArr[i],
+  }))
+
+  return (
+    <ResponsiveContainer width="100%" height={100}>
+      <ComposedChart data={chartData} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
+        <XAxis dataKey="date" hide />
+        <YAxis
+          width={45}
+          tick={{ fill: '#52525b', fontSize: 9, fontWeight: 600 }}
+          tickFormatter={v => v.toFixed(2)}
+          axisLine={false}
+          tickLine={false}
+          orientation="right"
+          tickCount={3}
+        />
+        <Tooltip
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null
+            return (
+              <div className="glass-card !bg-zinc-950/90 !rounded-xl px-3 py-2 text-xs shadow-2xl border-white/10 min-w-[140px]">
+                <div className="text-zinc-500 mb-1 font-bold text-[10px]">{label?.slice(5)}</div>
+                {payload.map((p, i) => (
+                  <div key={i} className="flex justify-between gap-3">
+                    <span style={{ color: p.color }}>{p.name}</span>
+                    <span className="font-mono text-zinc-200">{p.value?.toFixed(3)}</span>
+                  </div>
+                ))}
+              </div>
+            )
+          }}
+          cursor={{ stroke: 'rgba(255,255,255,0.1)', strokeWidth: 1 }}
+        />
+        <ReferenceLine y={0} stroke="rgba(255,255,255,0.08)" />
+        <Bar dataKey="hist" name="Histogram" maxBarSize={4} radius={[1, 1, 0, 0]}>
+          {chartData.map((d, i) => (
+            <Cell key={i} fill={d.hist >= 0 ? `${UP}88` : `${DOWN}88`} />
+          ))}
+        </Bar>
+        <Line dataKey="macd" stroke="#8b5cf6" dot={false} strokeWidth={1.5} name="MACD" connectNulls />
+        <Line dataKey="signal" stroke="#f59e0b" dot={false} strokeWidth={1.5} name="Signal" connectNulls strokeDasharray="4 2" />
       </ComposedChart>
     </ResponsiveContainer>
   )
@@ -294,6 +414,7 @@ export default function StockAnalysis() {
   const [inputSymbol, setInputSymbol] = useState(searchParams.get('symbol') || '')
   const [inputMarket, setInputMarket] = useState(searchParams.get('market') || 'US')
   const [period, setPeriod] = useState('3mo')
+  const [showBB, setShowBB] = useState(false)
 
   const symbol = searchParams.get('symbol') || ''
   const market = searchParams.get('market') || 'US'
@@ -436,20 +557,32 @@ export default function StockAnalysis() {
                   <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-[0.2em] flex items-center gap-2">
                     <BarChart2 size={14} className="text-zinc-600" /> 趨勢圖表
                   </h3>
-                  <div className="flex bg-zinc-950 p-1 rounded-xl border border-white/5">
-                    {PERIODS.map(p => (
-                      <button
-                        key={p}
-                        onClick={() => setPeriod(p)}
-                        className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                          period === p 
-                          ? 'bg-brand-600 text-white shadow-lg' 
-                          : 'text-zinc-600 hover:text-zinc-400'
-                        }`}
-                      >
-                        {p}
-                      </button>
-                    ))}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowBB(b => !b)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                        showBB
+                          ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
+                          : 'text-zinc-600 border-white/5 hover:text-zinc-400'
+                      }`}
+                    >
+                      BB 布林
+                    </button>
+                    <div className="flex bg-zinc-950 p-1 rounded-xl border border-white/5">
+                      {PERIODS.map(p => (
+                        <button
+                          key={p}
+                          onClick={() => setPeriod(p)}
+                          className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                            period === p
+                            ? 'bg-brand-600 text-white shadow-lg'
+                            : 'text-zinc-600 hover:text-zinc-400'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
@@ -459,10 +592,21 @@ export default function StockAnalysis() {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    <PriceChart data={histData} />
+                    <PriceChart data={histData} showBB={showBB} />
                     <div className="pt-4 border-t border-white/[0.04]">
-                       <div className="text-[10px] font-bold text-zinc-700 uppercase tracking-widest mb-2 ml-1">Volume Performance</div>
+                       <div className="text-[10px] font-bold text-zinc-700 uppercase tracking-widest mb-2 ml-1">Volume</div>
                        <VolumeChart data={histData} />
+                    </div>
+                    <div className="pt-2 border-t border-white/[0.04]">
+                       <div className="text-[10px] font-bold text-zinc-700 uppercase tracking-widest mb-2 ml-1">
+                         MACD (12,26,9) &nbsp;
+                         <span className="text-violet-500">— MACD</span>
+                         <span className="mx-1 text-zinc-700">·</span>
+                         <span className="text-amber-500">— Signal</span>
+                         <span className="mx-1 text-zinc-700">·</span>
+                         <span className="text-emerald-500/60">▌ Hist</span>
+                       </div>
+                       <MacdChart data={histData} />
                     </div>
                   </div>
                 )}

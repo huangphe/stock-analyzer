@@ -6,6 +6,9 @@ on:
     - cron: '45 6 * * 1-5'
   workflow_dispatch:  # 允許手動觸發
 
+permissions:
+  contents: write   # 允許 GITHUB_TOKEN push 回 repo
+
 jobs:
   update-limit-up-log:
     runs-on: ubuntu-latest
