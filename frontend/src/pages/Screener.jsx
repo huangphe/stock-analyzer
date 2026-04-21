@@ -9,7 +9,7 @@ import {
   ChevronUp, Send,
 } from 'lucide-react'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001/api'
+const API_BASE = import.meta.env.VITE_API_URL || 'https://backend-production-2879.up.railway.app/api'
 
 // ── 策略設定 ─────────────────────────────────────────────────────────────────
 
