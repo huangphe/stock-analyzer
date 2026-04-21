@@ -353,6 +353,7 @@ function StockScreenerTable({ stocks, title, side, maxRsi, minVol }) {
                 <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest">行業</th>
                 <SortTh label="價格" sortK="price" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} className="text-right" />
                 <SortTh label="漲跌幅" sortK="change_pct" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} className="text-right" />
+                <SortTh label="PE/PB" sortK="pe_ratio" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} className="text-center" />
                 <SortTh label="RSI" sortK="rsi" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} className="text-center" />
                 <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest text-center">MACD</th>
                 <th className="py-4 px-4 text-[9px] font-black text-zinc-600 uppercase tracking-widest text-center">BB %b</th>
@@ -385,6 +386,11 @@ function StockScreenerTable({ stocks, title, side, maxRsi, minVol }) {
                         </div>
                       </Link>
                     </td>
+                    <td className="py-4 px-4">
+                      <div className="text-[10px] font-bold text-zinc-400 bg-white/[0.03] px-2 py-1 rounded inline-block">
+                        {item.sector || 'N/A'}
+                      </div>
+                    </td>
                     <td className="py-4 px-4 text-right">
                       <div className="text-xs font-black font-mono text-zinc-200">${item.price?.toFixed(2)}</div>
                     </td>
@@ -394,10 +400,12 @@ function StockScreenerTable({ stocks, title, side, maxRsi, minVol }) {
                         {isUp ? '+' : ''}{item.change_pct?.toFixed(2)}%
                       </div>
                     </td>
-                    <td className="py-4 px-4">
-                      <div className="text-[10px] font-bold text-zinc-400 bg-white/[0.03] px-2 py-1 rounded inline-block">
-                        {item.sector || 'N/A'}
+                    <td className="py-4 px-4 text-center">
+                      <div className={`text-[10px] font-black font-mono ${item.pe_ratio < 20 ? 'text-emerald-400' : 'text-zinc-400'}`}>
+                        P/E {item.pe_ratio?.toFixed(1) || 'N/A'}
                       </div>
+                      <div className="text-[8px] font-bold text-zinc-700 italic">Sector PE Limit: {item.sector === 'Technology' ? '30' : item.sector === 'Financial Services' ? '15' : '20'}</div>
+                      <div className="text-[9px] font-bold text-zinc-700">P/B {item.pb_ratio?.toFixed(1) || 'N/A'}</div>
                     </td>
                     <td className="py-4 px-4 text-center">
                       <div className={`text-[11px] font-black font-mono ${item.rsi < 35 ? 'text-blue-400' : item.rsi > 70 ? 'text-amber-400' : 'text-zinc-500'}`}>
