@@ -102,7 +102,7 @@ class TWMarketScanner:
         """即時從 TWSE 抓今日漲停（>=9.8%）"""
         try:
             url = f"{TWSE_BASE}/exchangeReport/STOCK_DAY_ALL"
-            resp = requests.get(url, timeout=10)
+            resp = requests.get(url, timeout=10, verify=False)
             if not resp.content or resp.status_code != 200:
                 return []
 

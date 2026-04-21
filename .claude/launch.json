@@ -7,6 +7,13 @@
       "runtimeArgs": ["run", "dev"],
       "port": 5173,
       "cwd": "frontend"
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "venv312/Scripts/uvicorn.exe",
+      "runtimeArgs": ["main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "."],
+      "port": 8001,
+      "cwd": "backend"
     }
   ]
 }

@@ -11,18 +11,63 @@ import logging
 import time
 import random
 from datetime import datetime, date
-from typing import Optional, List
+from typing import Optional, List, Any
 from cachetools import TTLCache, cached
 import threading
+import json
+import redis
 from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# 簡易記憶體快取（正式環境可換 Redis）
-_cache_lock = threading.Lock()
-_quote_cache = TTLCache(maxsize=500, ttl=60)      # 報價快取 1 分鐘
-_history_cache = TTLCache(maxsize=200, ttl=300)    # 歷史快取 5 分鐘
-_tw_cache = TTLCache(maxsize=300, ttl=60)          # 台股快取 1 分鐘
+# --- 全域同步與並發控制 ---
+_yf_semaphore = threading.Semaphore(5) # 限制 yfinance 並發數
+
+# --- 快取管理層 ---
+class CacheManager:
+    def __init__(self):
+        self.redis_client = None
+        if settings.REDIS_URL:
+            try:
+                self.redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+                self.redis_client.ping()
+                logger.info("📡 Redis 已連線，啟用分散式快取")
+            except Exception as e:
+                logger.warning(f"⚠️ Redis 連線失敗，回退至記憶體快取: {e}")
+        
+        self.local_cache = TTLCache(maxsize=1000, ttl=settings.CACHE_TTL)
+        self.lock = threading.Lock()
+
+    def get(self, key: str):
+        with self.lock:
+            # 1. 嘗試 Redis
+            if self.redis_client:
+                try:
+                    val = self.redis_client.get(key)
+                    if val:
+                        return json.loads(val)
+                except Exception:
+                    pass
+            
+            # 2. 嘗試本地
+            return self.local_cache.get(key)
+
+    def set(self, key: str, value: Any, ttl: int = None):
+        if ttl is None:
+            ttl = settings.CACHE_TTL
+            
+        with self.lock:
+            # 1. 存入本地
+            self.local_cache[key] = value
+            
+            # 2. 存入 Redis
+            if self.redis_client:
+                try:
+                    self.redis_client.setex(key, ttl, json.dumps(value))
+                except Exception:
+                    pass
+
+cache_mgr = CacheManager()
 
 # 限制同時打 Yahoo Finance 的並發數，避免 429
 _yf_semaphore = threading.Semaphore(2)
@@ -79,6 +124,9 @@ class USStockFetcher:
             "prev_close": quote_data.get("pc", 0),
             "market_cap": None,
             "pe_ratio": None,
+            "pb_ratio": None,
+            "sector": None,
+            "industry": None,
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -92,6 +140,20 @@ class USStockFetcher:
                 result["pe_ratio"] = round(float(pe), 2)
             if mc:
                 result["market_cap"] = round(float(mc) * 1_000_000, 0)
+            
+            # 補充更多來自 metric 的欄位
+            result["pb_ratio"] = m.get("pbAnnual") or m.get("pbQuarterly")
+            if result["pb_ratio"]:
+                result["pb_ratio"] = round(float(result["pb_ratio"]), 2)
+                
+            result["dividend_yield"] = m.get("dividendYieldIndicatedAnnual") or m.get("dividendYieldTTM")
+            if result["dividend_yield"]:
+                result["dividend_yield"] = round(float(result["dividend_yield"]), 2)
+            
+            # 補充行情資訊
+            profile = _finnhub_get("/stock/profile2", {"symbol": sym})
+            result["sector"] = profile.get("finnhubIndustry")
+            result["industry"] = profile.get("finnhubIndustry")
         except Exception:
             pass
 
@@ -129,6 +191,9 @@ class USStockFetcher:
             "prev_close": prev_close,
             "market_cap": None,
             "pe_ratio": None,
+            "pb_ratio": None,
+            "sector": None,
+            "industry": None,
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -136,16 +201,15 @@ class USStockFetcher:
     def get_quote(symbol: str) -> dict:
         """取得美股即時報價（Finnhub 主，yfinance 備援）"""
         cache_key = f"us_quote_{symbol.upper()}"
-        with _cache_lock:
-            if cache_key in _quote_cache:
-                return _quote_cache[cache_key]
+        cached_val = cache_mgr.get(cache_key)
+        if cached_val:
+            return cached_val
 
         # 有 Finnhub key 時優先使用
         if settings.FINNHUB_API_KEY:
             try:
                 quote = USStockFetcher._quote_via_finnhub(symbol)
-                with _cache_lock:
-                    _quote_cache[cache_key] = quote
+                cache_mgr.set(cache_key, quote, ttl=60)
                 return quote
             except Exception as e:
                 logger.warning(f"Finnhub 失敗，改用 yfinance：{e}")
@@ -153,8 +217,7 @@ class USStockFetcher:
         # 備援：yfinance
         try:
             quote = USStockFetcher._quote_via_yfinance(symbol)
-            with _cache_lock:
-                _quote_cache[cache_key] = quote
+            cache_mgr.set(cache_key, quote, ttl=60)
             return quote
         except Exception as e:
             logger.error(f"美股報價抓取失敗 {symbol}: {e}")
@@ -220,17 +283,16 @@ class USStockFetcher:
     ) -> List[dict]:
         """取得美股歷史 K 線（Yahoo v8 直連 → yfinance 備援）"""
         cache_key = f"us_hist_{symbol}_{period}_{interval}"
-        with _cache_lock:
-            if cache_key in _history_cache:
-                return _history_cache[cache_key]
+        cached_val = cache_mgr.get(cache_key)
+        if cached_val:
+            return cached_val
 
         # 主：Yahoo Finance v8 API 直連
         for attempt in range(3):
             try:
                 bars = USStockFetcher._history_via_yahoo_direct(symbol, period, interval)
                 if bars:
-                    with _cache_lock:
-                        _history_cache[cache_key] = bars
+                    cache_mgr.set(cache_key, bars, ttl=300)
                     return bars
             except Exception as e:
                 if attempt < 2:
@@ -258,8 +320,7 @@ class USStockFetcher:
                     "volume": int(row["Volume"]),
                 })
 
-            with _cache_lock:
-                _history_cache[cache_key] = bars
+            cache_mgr.set(cache_key, bars, ttl=300)
             return bars
 
         except Exception as e:
@@ -400,13 +461,13 @@ class TWStockFetcher:
     def _get_twse_realtime() -> dict:
         """取得台股即時行情（所有股票）"""
         cache_key = "tw_realtime_all"
-        with _cache_lock:
-            if cache_key in _tw_cache:
-                return _tw_cache[cache_key]
+        cached_val = cache_mgr.get(cache_key)
+        if cached_val:
+            return cached_val
 
         try:
             url = f"{TWSE_BASE}/exchangeReport/STOCK_DAY_ALL"
-            resp = requests.get(url, timeout=10)
+            resp = requests.get(url, timeout=10, verify=False)
             resp.raise_for_status()
             data = resp.json()
 
@@ -417,8 +478,7 @@ class TWStockFetcher:
                 if code:
                     mapping[code] = item
 
-            with _cache_lock:
-                _tw_cache[cache_key] = mapping
+            cache_mgr.set(cache_key, mapping, ttl=60) # 快取 1 分鐘
             return mapping
 
         except Exception as e:
@@ -432,9 +492,9 @@ class TWStockFetcher:
         code = symbol.replace(".TW", "").upper()
         cache_key = f"tw_quote_{code}"
 
-        with _cache_lock:
-            if cache_key in _quote_cache:
-                return _quote_cache[cache_key]
+        cached_val = cache_mgr.get(cache_key)
+        if cached_val:
+            return cached_val
 
         # 優先：STOCK_DAY_ALL（一次取全部台股，快取 1 分鐘，週末也有資料）
         try:
@@ -467,12 +527,39 @@ class TWStockFetcher:
                     "prev_close": prev_close,
                     "market_cap": None,
                     "pe_ratio": None,
+                    "pb_ratio": None,
+                    "sector": None,
+                    "industry": None,
                     "timestamp": datetime.now().isoformat(),
                 }
 
                 if close_price > 0:
-                    with _cache_lock:
-                        _quote_cache[cache_key] = quote
+                    # 補充台股基本面 (PE/PB)
+                    try:
+                        info_cache_key = f"tw_info_{code}"
+                        info = cache_mgr.get(info_cache_key)
+                        if not info:
+                            # 由於 yfinance info 較慢，非同步或延遲抓取，此處先嘗試抓取
+                            with _yf_semaphore:
+                                t = yf.Ticker(f"{code}.TW")
+                                info = {
+                                    "pe": t.info.get("trailingPE"),
+                                    "pb": t.info.get("priceToBook"),
+                                    "mc": t.info.get("marketCap"),
+                                    "sector": t.info.get("sector"),
+                                    "industry": t.info.get("industry")
+                                }
+                                cache_mgr.set(info_cache_key, info, ttl=43200) # 12 hours
+                        
+                        quote["pe_ratio"] = info.get("pe")
+                        quote["pb_ratio"] = info.get("pb")
+                        quote["market_cap"] = info.get("mc")
+                        quote["sector"] = info.get("sector")
+                        quote["industry"] = info.get("industry")
+                    except Exception as e:
+                        logger.debug(f"台股基本面抓取跳過 {code}: {e}")
+
+                    cache_mgr.set(cache_key, quote, ttl=60)
                     return quote
 
         except Exception as e:
@@ -483,7 +570,7 @@ class TWStockFetcher:
             url = f"{TWSE_BASE}/exchangeReport/STOCK_DAY"
             month_str = date.today().strftime("%Y%m01")
             params = {"response": "json", "date": month_str, "stockNo": code}
-            resp = requests.get(url, params=params, timeout=10)
+            resp = requests.get(url, params=params, timeout=10, verify=False)
             data = resp.json()
 
             if data and "data" in data and data["data"]:
@@ -508,10 +595,12 @@ class TWStockFetcher:
                     "prev_close": prev_close,
                     "market_cap": None,
                     "pe_ratio": None,
+                    "pb_ratio": None,
+                    "sector": None,
+                    "industry": None,
                     "timestamp": datetime.now().isoformat(),
                 }
-                with _cache_lock:
-                    _quote_cache[cache_key] = quote
+                cache_mgr.set(cache_key, quote, ttl=60)
                 return quote
 
         except Exception as e:
@@ -528,9 +617,9 @@ class TWStockFetcher:
         """取得台股歷史 K 線（Fugle 主 → Yahoo 備援）"""
         code = symbol.replace(".TW", "")
         cache_key = f"tw_hist_{code}_{period}_{interval}"
-        with _cache_lock:
-            if cache_key in _history_cache:
-                return _history_cache[cache_key]
+        cached_val = cache_mgr.get(cache_key)
+        if cached_val:
+            return cached_val
 
         # 主：Fugle Market Data API（日線用，月線超過1年限制故略過）
         if interval == "1d":
@@ -540,8 +629,7 @@ class TWStockFetcher:
                     bars = _fugle_history(code, period, interval)
                     if bars:
                         logger.info(f"Fugle 台股歷史成功: {code} {len(bars)} 根K棒")
-                        with _cache_lock:
-                            _history_cache[cache_key] = bars
+                        cache_mgr.set(cache_key, bars, ttl=3600)
                         return bars
             except Exception as e:
                 logger.warning(f"Fugle 台股歷史失敗 {code}，改用 Yahoo: {e}")
@@ -549,8 +637,7 @@ class TWStockFetcher:
         # 備援：Yahoo Finance（.TW 後綴）
         bars = USStockFetcher.get_history(f"{code}.TW", period=period, interval=interval)
         if bars:
-            with _cache_lock:
-                _history_cache[cache_key] = bars
+            cache_mgr.set(cache_key, bars, ttl=3600)
         return bars
 
     @staticmethod

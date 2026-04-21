@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # 取得期權鏈重試機制
     MAX_RETRIES: int = 3
 
+    # Telegram 推送（選股篩選結果通知）
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+
     class Config:
         env_file = ".env"
         case_sensitive = True

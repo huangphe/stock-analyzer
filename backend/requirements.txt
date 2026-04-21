@@ -17,6 +17,8 @@ scipy==1.13.0
 
 # 快取
 cachetools==5.3.3
+redis==5.0.4
 
-# Rate limiting
+# API 請求
+httpx==0.27.0
 slowapi==0.1.9

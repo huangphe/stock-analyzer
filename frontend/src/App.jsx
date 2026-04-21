@@ -12,6 +12,7 @@ const StockAnalysis    = lazy(() => import('./pages/StockAnalysis'))
 const OptionsStrategy  = lazy(() => import('./pages/OptionsStrategy'))
 const Dashboard        = lazy(() => import('./pages/Dashboard'))
 const Screener         = lazy(() => import('./pages/Screener'))
+const Backtest         = lazy(() => import('./pages/Backtest'))
 const ContraryIndicator = lazy(() => import('./pages/ContraryIndicator'))
 
 const NAV = [
@@ -20,6 +21,7 @@ const NAV = [
   { to: '/stocks',     label: '股票分析',  icon: LineChart            },
   { to: '/screener',   label: '選股篩選',  icon: SlidersHorizontal    },
   { to: '/options',    label: '期權策略',  icon: Layers               },
+  { to: '/backtest',   label: '策略回測',  icon: LineChart            },
   { to: '/contrary',   label: '逆向指標',  icon: TrendingDown         },
 ]
 
@@ -166,6 +168,7 @@ export default function App() {
                   <Route path="/stocks"   element={<StockAnalysis />} />
                   <Route path="/screener" element={<Screener />} />
                   <Route path="/options"  element={<OptionsStrategy />} />
+                  <Route path="/backtest" element={<Backtest />} />
                   <Route path="/contrary" element={<ContraryIndicator />} />
                 </Routes>
               </Suspense>

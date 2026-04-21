@@ -57,6 +57,8 @@ app.include_router(stocks.router, prefix="/api/stocks", tags=["Stocks 股票"])
 app.include_router(options.router, prefix="/api/options", tags=["Options 期權"])
 app.include_router(strategies.router, prefix="/api/strategies", tags=["Strategies 策略"])
 app.include_router(screener.router, prefix="/api/screener", tags=["Screener 選股篩選器"])
+from routers import backtest
+app.include_router(backtest.router, prefix="/api/backtest", tags=["Backtest 歷史回測"])
 
 
 @app.get("/", tags=["Health"])
